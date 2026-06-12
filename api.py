@@ -534,7 +534,7 @@ def list_positions():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/operations")
+@app.get("/operations", include_in_schema=False)
 def operations():
     return {"operations": list(ROTATION_FILES.keys())}
 
@@ -726,18 +726,18 @@ async def upload_database(file: UploadFile = File(...)):
 # --------------------------
 # Planning and Rotation endpoints (existing)
 # --------------------------
-@app.post("/manpower-gap")
+@app.post("/manpower-gap", include_in_schema=False)
 def manpower_gap(data: ManpowerRequest):
     gap = data.required - data.available
     return {"required": data.required, "available": data.available, "gap": gap, "status": "Shortage" if gap > 0 else "Covered"}
 
-@app.post("/coverage")
+@app.post("/coverage", include_in_schema=False)
 def coverage(data: ManpowerRequest):
     if data.required == 0:
         return {"coverage_percent": 0}
     return {"coverage_percent": round((data.available / data.required) * 100, 2)}
 
-@app.post("/overtime")
+@app.post("/overtime", include_in_schema=False)
 def overtime(data: OvertimeRequest):
     missing = max(data.required - data.available, 0)
     return {"missing_workers": missing, "overtime_hours": missing * data.shift_hours}
@@ -937,7 +937,7 @@ def rotation_available_sheets(operation: str):
         raise HTTPException(status_code=500, detail=f"Error reading workbook: {str(e)}")
 
 
-@app.post("/advisor")
+@app.post("/advisor", include_in_schema=False)
 def advisor(data: AdvisorRequest):
     required = data.units * 2
     gap = max(required - data.available, 0)
