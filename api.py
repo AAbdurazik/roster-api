@@ -834,7 +834,25 @@ def get_rotation(operation: str, units: int):
 # ==========================
 # Updated /rotation/custom endpoint
 # ==========================
-@app.post("/rotation/custom")
+from fastapi.responses import StreamingResponse
+
+@app.post(
+    "/rotation/custom",
+    response_class=StreamingResponse,
+    responses={
+        200: {
+            "description": "Excel file with rotation data",
+            "content": {
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {
+                    "schema": {
+                        "type": "string",
+                        "format": "binary"
+                    }
+                }
+            }
+        }
+    }
+)
 def custom_rotation(data: RotationRequest):
     operation = data.operation.upper()
     if operation not in ROTATION_FILES:
@@ -855,10 +873,7 @@ def custom_rotation(data: RotationRequest):
     units = len(equipment_numbers)
 
     try:
-        # Generate the rotation workbook using the shared function
         excel_bytesio = export_rotation_excel(operation, units, equipment_numbers)
-
-        # Create a filename and return as StreamingResponse
         filename = f"{operation}_{units}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
         return StreamingResponse(
             excel_bytesio,
