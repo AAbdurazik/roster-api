@@ -25,6 +25,12 @@ app = FastAPI(
     description="Professional API for employee roster, statistics, rotations with export to Excel/PDF, full CRUD operations and file uploads.",
     version="4.0.0",
     docs_url="/docs",
+    servers=[
+        {
+            "url": "https://roster-api-fciq.onrender.com",
+            "description": "Production"
+        }
+    ]
 )
 
 # CORS
