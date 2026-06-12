@@ -318,20 +318,79 @@ def export_positions_by_shift_excel():
     output.seek(0)
     return output
 
-def export_rotation_excel(operation: str, units: int, rotation_data: List[dict]):
+# ==========================
+# Updated export_rotation_excel function (with formatting preservation)
+# ==========================
+def export_rotation_excel(
+    operation: str,
+    units: int,
+    equipment_numbers: list
+):
+    import io
+    import re
+    from openpyxl import load_workbook
+
+    operation = operation.upper()
+
+    if operation not in ROTATION_FILES:
+        raise Exception(f"Invalid operation: {operation}")
+
+    template_file = ROTATION_FILES[operation]
+
+    # Load the template workbook with full formatting
+    wb = load_workbook(template_file)
+
+    sheet_name = str(units)
+
+    if sheet_name not in wb.sheetnames:
+        raise Exception(f"Sheet {sheet_name} not found in {operation}")
+
+    ws = wb[sheet_name]
+
+    # Create mapping: placeholder number -> actual equipment number
+    mapping = {}
+    for i, eq in enumerate(equipment_numbers, start=1):
+        mapping[str(i)] = str(eq)
+
+    # Iterate through all cells and replace placeholders according to operation rules
+    for row in ws.iter_rows():
+        for cell in row:
+            if cell.value is None:
+                continue
+            value = str(cell.value).strip()
+
+            # Operation-specific replacements
+            if operation == "STS":
+                if value in mapping:
+                    cell.value = f"STS{mapping[value]}"
+
+            elif operation == "RTG":
+                if value in mapping:
+                    cell.value = mapping[value]
+
+            elif operation == "TRUCK":
+                if value in mapping:
+                    cell.value = mapping[value]
+
+            elif operation == "DECK":
+                match = re.match(r"([WD])(\d+)", value)
+                if match:
+                    prefix = match.group(1)
+                    number = match.group(2)
+                    if number in mapping:
+                        cell.value = prefix + mapping[number]
+
+            elif operation == "RS&EH":
+                match = re.match(r"^(RS|EH)\s*0*(\d+)$", value.upper())
+                if match:
+                    prefix = match.group(1)
+                    number = match.group(2)
+                    if number in mapping:
+                        cell.value = f"{prefix}{mapping[number]}"
+
+    # Save to BytesIO (preserves all formatting, merged cells, etc.)
     output = io.BytesIO()
-    workbook = xlsxwriter.Workbook(output, {'in_memory': True})
-    worksheet = workbook.add_worksheet(f"{operation}_{units}units")
-    header_fmt = workbook.add_format({'bold': True, 'bg_color': '#4F81BD', 'font_color': 'white', 'border': 1})
-    cell_fmt = workbook.add_format({'border': 1})
-    if rotation_data:
-        headers = list(rotation_data[0].keys())
-        for col, h in enumerate(headers):
-            worksheet.write(0, col, h, header_fmt)
-        for row, record in enumerate(rotation_data, start=1):
-            for col, key in enumerate(headers):
-                worksheet.write(row, col, record.get(key, ""), cell_fmt)
-    workbook.close()
+    wb.save(output)
     output.seek(0)
     return output
 
@@ -577,25 +636,39 @@ def export_positions_by_shift_endpoint(format: str = Query(..., pattern="^(excel
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/export/rotation/{operation}/{units}")
+# ==========================
+# Updated /export/rotation endpoint (to work with new export_rotation_excel)
+# ==========================
+@app.get("/export/rotation/{operation}/{units}", include_in_schema=False)
 def export_rotation_endpoint(operation: str, units: int, format: str = Query(..., pattern="^(excel|pdf)$")):
     operation = operation.upper()
     if operation not in ROTATION_FILES:
         raise HTTPException(status_code=400, detail="Invalid operation")
     try:
-        import pandas as pd
-        df = pd.read_excel(ROTATION_FILES[operation], sheet_name=str(units), header=None)
-        rotation = df.fillna("").to_dict(orient="records")
         if format == "excel":
-            file = export_rotation_excel(operation, units, rotation)
-            return StreamingResponse(file, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": f"attachment; filename=rotation_{operation}_{units}_{datetime.now().strftime('%Y%m%d')}.xlsx"})
+            # Generate default equipment numbers 1..units for simple export
+            equipment_numbers = list(range(1, units + 1))
+            file = export_rotation_excel(operation, units, equipment_numbers)
+            return StreamingResponse(
+                file,
+                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                headers={"Content-Disposition": f"attachment; filename=rotation_{operation}_{units}_{datetime.now().strftime('%Y%m%d')}.xlsx"}
+            )
         else:
+            # PDF export remains using pandas rotation data
+            import pandas as pd
+            df = pd.read_excel(ROTATION_FILES[operation], sheet_name=str(units), header=None)
+            rotation = df.fillna("").to_dict(orient="records")
             file = export_rotation_pdf(operation, units, rotation)
-            return StreamingResponse(file, media_type="application/pdf", headers={"Content-Disposition": f"attachment; filename=rotation_{operation}_{units}_{datetime.now().strftime('%Y%m%d')}.pdf"})
+            return StreamingResponse(
+                file,
+                media_type="application/pdf",
+                headers={"Content-Disposition": f"attachment; filename=rotation_{operation}_{units}_{datetime.now().strftime('%Y%m%d')}.pdf"}
+            )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/export/all")
+@app.get("/export/all", include_in_schema=False)
 def export_all():
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as zipf:
@@ -758,11 +831,15 @@ def get_rotation(operation: str, units: int):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+# ==========================
+# Updated /rotation/custom endpoint
+# ==========================
 @app.post("/rotation/custom")
 def custom_rotation(data: RotationRequest):
     operation = data.operation.upper()
     if operation not in ROTATION_FILES:
         raise HTTPException(status_code=400, detail="Invalid operation")
+
     equipment_numbers = []
     if data.equipment_numbers is not None:
         equipment_numbers = data.equipment_numbers.copy()
@@ -770,35 +847,24 @@ def custom_rotation(data: RotationRequest):
         equipment_numbers = parse_equipment_numbers(data.equipment_string)
     else:
         raise HTTPException(status_code=400, detail="Provide 'equipment_numbers' or 'equipment_string'")
+
     if not equipment_numbers:
         raise HTTPException(status_code=400, detail="No valid equipment numbers provided")
+
     equipment_numbers.sort()
     units = len(equipment_numbers)
+
     try:
-        wb = load_workbook(ROTATION_FILES[operation])
-        sheet_name = str(units)
-        if sheet_name not in wb.sheetnames:
-            raise HTTPException(status_code=404, detail=f"No sheet found for {units} units")
-        ws = wb[sheet_name]
-        mapping = {str(i): str(eq) for i, eq in enumerate(equipment_numbers, start=1)}
-        for row in ws.iter_rows():
-            for cell in row:
-                if cell.value is None:
-                    continue
-                val = str(cell.value).strip()
-                if val in mapping:
-                    cell.value = mapping[val]
-        for sheet in list(wb.sheetnames):
-            if sheet != sheet_name:
-                wb.remove(wb[sheet])
-        os.makedirs("generated_rotations", exist_ok=True)
+        # Generate the rotation workbook using the shared function
+        excel_bytesio = export_rotation_excel(operation, units, equipment_numbers)
+
+        # Create a filename and return as StreamingResponse
         filename = f"{operation}_{units}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-        output_path = os.path.join("generated_rotations", filename)
-        wb.save(output_path)
-        wb.close()
-        return FileResponse(output_path, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", filename=filename)
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail=f"Rotation file for {operation} not found")
+        return StreamingResponse(
+            excel_bytesio,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -806,7 +872,7 @@ def custom_rotation(data: RotationRequest):
 # Rotation Preview & Validation Endpoints (NEW)
 # ==========================
 
-@app.post("/rotation/preview")
+@app.post("/rotation/preview", include_in_schema=False)
 def rotation_preview(request: RotationPreviewRequest):
     """
     Preview how equipment numbers will be processed for rotation.
@@ -855,7 +921,7 @@ def rotation_preview(request: RotationPreviewRequest):
     }
 
 
-@app.post("/rotation/validate")
+@app.post("/rotation/validate", include_in_schema=False)
 def rotation_validate(request: RotationValidateRequest):
     """
     Validate if a rotation request can be processed.
