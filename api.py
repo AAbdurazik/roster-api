@@ -357,6 +357,11 @@ def export_rotation_excel(
     if sheet_name not in wb.sheetnames:
         raise Exception(f"Sheet {sheet_name} not found in {operation}")
 
+    # Keep only the requested sheet
+    for sheet in wb.sheetnames.copy():
+        if sheet != sheet_name:
+            wb.remove(wb[sheet])
+
     ws = wb[sheet_name]
 
     # Create mapping: placeholder number -> actual equipment number
@@ -388,15 +393,16 @@ def export_rotation_excel(
                 match = re.match(r"([WD])(\d+)", value)
                 if match:
                     prefix = match.group(1)
-                    number = match.group(2)
+                    number = str(int(match.group(2)))
                     if number in mapping:
-                        cell.value = prefix + mapping[number]
+                        actual_number = int(mapping[number])
+                        cell.value = f"{prefix}{actual_number:02d}"
 
             elif operation == "RS&EH":
                 match = re.match(r"^(RS|EH)\s*0*(\d+)$", value.upper())
                 if match:
                     prefix = match.group(1)
-                    number = match.group(2)
+                    number = str(int(match.group(2)))
                     if number in mapping:
                         cell.value = f"{prefix}{mapping[number]}"
 
