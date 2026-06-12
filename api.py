@@ -358,10 +358,12 @@ def export_rotation_excel(
         raise Exception(f"Sheet {sheet_name} not found in {operation}")
 
     # Keep only the requested sheet
-    for sheet in wb.sheetnames.copy():
-        if sheet != sheet_name:
-            wb.remove(wb[sheet])
+    for name in list(wb.sheetnames):
+        if name != sheet_name:
+            std = wb[name]
+            wb.remove(std)
 
+    print("Remaining sheets:", wb.sheetnames)
     ws = wb[sheet_name]
 
     # Create mapping: placeholder number -> actual equipment number
@@ -390,12 +392,29 @@ def export_rotation_excel(
                     cell.value = mapping[value]
 
             elif operation == "DECK":
+
                 match = re.match(r"([WD])(\d+)", value)
+
                 if match:
+
+                    print(
+                        f"DECK MATCH: {value} "
+                        f"number={match.group(2)}"
+                    )
+
                     prefix = match.group(1)
+
                     number = str(int(match.group(2)))
+
                     if number in mapping:
+
                         actual_number = int(mapping[number])
+
+                        print(
+                            f"REPLACE {value} -> "
+                            f"{prefix}{actual_number:02d}"
+                        )
+
                         cell.value = f"{prefix}{actual_number:02d}"
 
             elif operation == "RS&EH":
@@ -407,6 +426,7 @@ def export_rotation_excel(
                         cell.value = f"{prefix}{mapping[number]}"
 
     # Save to BytesIO (preserves all formatting, merged cells, etc.)
+    print("Remaining sheets:", wb.sheetnames)
     output = io.BytesIO()
     wb.save(output)
     output.seek(0)
