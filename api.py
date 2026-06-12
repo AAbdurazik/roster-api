@@ -4,12 +4,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from openpyxl import load_workbook, Workbook
 from datetime import datetime
+
 import os
 import re
 import io
 import zipfile
 import shutil
 from typing import Optional, List
+from pathlib import Path
+
+EXPORT_DIR = Path("generated_files")
+EXPORT_DIR.mkdir(exist_ok=True)
 
 # Excel & PDF libraries
 import xlsxwriter
@@ -101,6 +106,13 @@ class RotationPreviewRequest(BaseModel):
 class RotationValidateRequest(BaseModel):
     operation: str
     equipment_string: str
+
+class RotationResponse(BaseModel):
+    success: bool
+    operation: str
+    units: int
+    filename: str
+    download_url: str
 
 # ==========================
 # Helper Functions
@@ -834,54 +846,74 @@ def get_rotation(operation: str, units: int):
 # ==========================
 # Updated /rotation/custom endpoint
 # ==========================
-from fastapi.responses import StreamingResponse
 
 @app.post(
     "/rotation/custom",
-    response_class=StreamingResponse,
-    responses={
-        200: {
-            "description": "Excel file with rotation data",
-            "content": {
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {
-                    "schema": {
-                        "type": "string",
-                        "format": "binary"
-                    }
-                }
-            }
-        }
-    }
+    response_model=RotationResponse
 )
 def custom_rotation(data: RotationRequest):
+
     operation = data.operation.upper()
+
     if operation not in ROTATION_FILES:
         raise HTTPException(status_code=400, detail="Invalid operation")
 
-    equipment_numbers = []
     if data.equipment_numbers is not None:
         equipment_numbers = data.equipment_numbers.copy()
+
     elif data.equipment_string is not None:
-        equipment_numbers = parse_equipment_numbers(data.equipment_string)
+        equipment_numbers = parse_equipment_numbers(
+            data.equipment_string
+        )
+
     else:
-        raise HTTPException(status_code=400, detail="Provide 'equipment_numbers' or 'equipment_string'")
+        raise HTTPException(
+            status_code=400,
+            detail="Provide equipment numbers"
+        )
 
     if not equipment_numbers:
-        raise HTTPException(status_code=400, detail="No valid equipment numbers provided")
+        raise HTTPException(
+            status_code=400,
+            detail="No valid equipment numbers provided"
+        )
 
     equipment_numbers.sort()
+
     units = len(equipment_numbers)
 
     try:
-        excel_bytesio = export_rotation_excel(operation, units, equipment_numbers)
-        filename = f"{operation}_{units}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-        return StreamingResponse(
-            excel_bytesio,
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={"Content-Disposition": f"attachment; filename={filename}"}
+
+        excel_bytesio = export_rotation_excel(
+            operation,
+            units,
+            equipment_numbers
         )
+
+        filename = (
+            f"{operation}_{units}_"
+            f"{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        )
+
+        filepath = EXPORT_DIR / filename
+
+        with open(filepath, "wb") as f:
+            f.write(excel_bytesio.getvalue())
+
+        return {
+            "success": True,
+            "operation": operation,
+            "units": units,
+            "filename": filename,
+            "download_url":
+                f"https://roster-api-fciq.onrender.com/download/{filename}"
+        }
+
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
 
 # ==========================
 # Rotation Preview & Validation Endpoints (NEW)
@@ -1017,6 +1049,22 @@ def rotation_available_sheets(operation: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error reading workbook: {str(e)}")
 
+@app.get("/download/{filename}")
+def download_file(filename: str):
+
+    filepath = EXPORT_DIR / filename
+
+    if not filepath.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="File not found"
+        )
+
+    return FileResponse(
+        path=filepath,
+        filename=filename,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
 
 @app.post("/advisor", include_in_schema=False)
 def advisor(data: AdvisorRequest):
